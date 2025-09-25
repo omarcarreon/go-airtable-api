@@ -1,0 +1,35 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go build artifacts
+bin/
+build/
+dist/
+coverage.*
+
+# Go module/vendor (only if you intentionally vendor, otherwise keep it ignored)
+vendor/
+
+# Logs
+*.log
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+**/.DS_Store
+
+# Environment files
+.env
+.env.*
+
+
