@@ -48,16 +48,18 @@ func (s *Store) ListAlbums(c *gin.Context) {
 
 func (s *Store) GetAlbumByID(c *gin.Context) {
     id := c.Param("id")
-    rec, err := s.table.GetRecord(id)
+    recs, err := s.table.GetRecords().
+        WithFilterFormula(fmt.Sprintf("{id}='%s'", id)).
+        Do()
     if err != nil {
         c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
     }
-    if rec == nil {
+    if len(recs.Records) == 0 {
         c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
         return
     }
-    f := rec.Fields
+    f := recs.Records[0].Fields
     a := album{
         ID:     toString(f["id"]),
         Title:  toString(f["title"]),
@@ -84,7 +86,7 @@ func (s *Store) CreateAlbum(c *gin.Context) {
     }
 	recs, err := s.table.AddRecords(payload)
     if err != nil || len(recs.Records) == 0 {
-        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "failed to create album"})
+        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "failed to create album," + err.Error()})
         return
     }
     f := recs.Records[0].Fields
