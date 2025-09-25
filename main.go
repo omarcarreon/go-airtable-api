@@ -1,9 +1,14 @@
 package main
 
 import (
+    "encoding/json"
+    "fmt"
+    "log"
     "net/http"
+    "os"
 
     "github.com/gin-gonic/gin"
+    "github.com/mehanizm/airtable"
 )
 
 // album represents data about a record album.
@@ -14,55 +19,124 @@ type album struct {
     Price  float64 `json:"price"`
 }
 
-// albums slice to seed record album data.
-var albums = []album{
-    {ID: "1", Title: "Blue Train", Artist: "John Coltrane", Price: 56.99},
-    {ID: "2", Title: "Jeru", Artist: "Gerry Mulligan", Price: 17.99},
-    {ID: "3", Title: "Sarah Vaughan and Clifford Brown", Artist: "Sarah Vaughan", Price: 39.99},
+// Store keeps dependencies for data access simple and testable
+type Store struct {
+    table *airtable.Table
+}
+
+func NewStore(table *airtable.Table) *Store { return &Store{table: table} }
+
+func (s *Store) ListAlbums(c *gin.Context) {
+    params := &airtable.ListParameters{PageSize: 5}
+    recs, err := s.table.GetRecords(params)
+    if err != nil {
+        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    out := make([]album, 0, len(recs.Records))
+    for _, r := range recs.Records {
+        f := r.Fields
+        out = append(out, album{
+            ID:     toString(f["id"]),
+            Title:  toString(f["title"]),
+            Artist: toString(f["artist"]),
+            Price:  toFloat(f["price"]),
+        })
+    }
+    c.IndentedJSON(http.StatusOK, out)
+}
+
+func (s *Store) GetAlbumByID(c *gin.Context) {
+    id := c.Param("id")
+    params := &airtable.ListParameters{FilterByFormula: fmt.Sprintf("{id}='%s'", id), PageSize: 1}
+    recs, err := s.table.GetRecords(params)
+    if err != nil {
+        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    if len(recs.Records) == 0 {
+        c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
+        return
+    }
+    f := recs.Records[0].Fields
+    a := album{
+        ID:     toString(f["id"]),
+        Title:  toString(f["title"]),
+        Artist: toString(f["artist"]),
+        Price:  toFloat(f["price"]),
+    }
+    c.IndentedJSON(http.StatusOK, a)
+}
+func (s *Store) CreateAlbum(c *gin.Context) {
+    var a album
+    if err := c.BindJSON(&a); err != nil {
+        c.IndentedJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+    fields := map[string]interface{}{
+        "id": a.ID,
+        "title": a.Title,
+        "artist": a.Artist,
+        "price": a.Price,
+    }
+    rec := &airtable.Record{Fields: fields}
+    created, err := s.table.CreateRecord(rec)
+    if err != nil {
+        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    f := created.Fields
+    out := album{
+        ID:     toString(f["id"]),
+        Title:  toString(f["title"]),
+        Artist: toString(f["artist"]),
+        Price:  toFloat(f["price"]),
+    }
+    c.IndentedJSON(http.StatusCreated, out)
 }
 
 func main() {
+    // env config: read and validate vars.
+    airtableToken := os.Getenv("AIRTABLE_TOKEN")
+    airtableBaseID := os.Getenv("AIRTABLE_BASE_ID")
+    airtableTable := os.Getenv("AIRTABLE_TABLE")
+    if airtableToken == "" || airtableBaseID == "" || airtableTable == "" {
+        log.Fatal("missing required env vars: AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE")
+    }
+
+    // Airtable client setup
+    air := airtable.NewClient(airtableToken)
+    tbl := air.GetTable(airtableBaseID, airtableTable)
+    store := NewStore(tbl)
+
     router := gin.Default()
-    router.GET("/albums", getAlbums)
-	router.GET("/albums/:id", getAlbumByID)
-	router.POST("/albums", postAlbums)
+    router.GET("/albums", store.ListAlbums)
+	router.GET("/albums/:id", store.GetAlbumByID)
+	router.POST("/albums", store.CreateAlbum)
 
     router.Run("localhost:8080")
 }
 
 
-// getAlbums responds with the list of all albums as JSON.
-func getAlbums(c *gin.Context) {
-    c.IndentedJSON(http.StatusOK, albums)
-}
+// removed: postAlbums (replaced by Store.CreateAlbum)
 
-// postAlbums adds an album from JSON received in the request body.
-func postAlbums(c *gin.Context) {
-    var newAlbum album
+// getAlbumByID now handled by Store.GetAlbumByID
 
-    // Call BindJSON to bind the received JSON to
-    // newAlbum.
-    if err := c.BindJSON(&newAlbum); err != nil {
-        return
+// helpers for Airtable field conversion (keep simple)
+func toString(v interface{}) string { return fmt.Sprint(v) }
+
+func toFloat(v interface{}) float64 {
+    switch t := v.(type) {
+    case float64:
+        return t
+    case int:
+        return float64(t)
+    case int64:
+        return float64(t)
+    case json.Number:
+        f, _ := t.Float64()
+        return f
+    default:
+        return 0
     }
-
-    // Add the new album to the slice.
-    albums = append(albums, newAlbum)
-    c.IndentedJSON(http.StatusCreated, newAlbum)
-}
-
-// getAlbumByID locates the album whose ID value matches the id
-// parameter sent by the client, then returns that album as a response.
-func getAlbumByID(c *gin.Context) {
-    id := c.Param("id")
-
-    // Loop over the list of albums, looking for
-    // an album whose ID value matches the parameter.
-    for _, a := range albums {
-        if a.ID == id {
-            c.IndentedJSON(http.StatusOK, a)
-            return
-        }
-    }
-    c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
 }
