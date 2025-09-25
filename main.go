@@ -8,6 +8,7 @@ import (
     "os"
 
     "github.com/gin-gonic/gin"
+    "github.com/joho/godotenv"
     "github.com/mehanizm/airtable"
 )
 
@@ -27,8 +28,7 @@ type Store struct {
 func NewStore(table *airtable.Table) *Store { return &Store{table: table} }
 
 func (s *Store) ListAlbums(c *gin.Context) {
-    params := &airtable.ListParameters{PageSize: 5}
-    recs, err := s.table.GetRecords(params)
+    recs, err := s.table.GetRecords().Do()
     if err != nil {
         c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
@@ -48,17 +48,16 @@ func (s *Store) ListAlbums(c *gin.Context) {
 
 func (s *Store) GetAlbumByID(c *gin.Context) {
     id := c.Param("id")
-    params := &airtable.ListParameters{FilterByFormula: fmt.Sprintf("{id}='%s'", id), PageSize: 1}
-    recs, err := s.table.GetRecords(params)
+    rec, err := s.table.GetRecord(id)
     if err != nil {
         c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
     }
-    if len(recs.Records) == 0 {
+    if rec == nil {
         c.IndentedJSON(http.StatusNotFound, gin.H{"message": "album not found"})
         return
     }
-    f := recs.Records[0].Fields
+    f := rec.Fields
     a := album{
         ID:     toString(f["id"]),
         Title:  toString(f["title"]),
@@ -73,19 +72,22 @@ func (s *Store) CreateAlbum(c *gin.Context) {
         c.IndentedJSON(http.StatusBadRequest, gin.H{"error": err.Error()})
         return
     }
-    fields := map[string]interface{}{
-        "id": a.ID,
-        "title": a.Title,
-        "artist": a.Artist,
-        "price": a.Price,
+    payload := &airtable.Records{
+        Records: []*airtable.Record{
+            {Fields: map[string]any{
+                "id":     a.ID,
+                "title":  a.Title,
+                "artist": a.Artist,
+                "price":  a.Price,
+            }},
+        },
     }
-    rec := &airtable.Record{Fields: fields}
-    created, err := s.table.CreateRecord(rec)
-    if err != nil {
-        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	recs, err := s.table.AddRecords(payload)
+    if err != nil || len(recs.Records) == 0 {
+        c.IndentedJSON(http.StatusInternalServerError, gin.H{"error": "failed to create album"})
         return
     }
-    f := created.Fields
+    f := recs.Records[0].Fields
     out := album{
         ID:     toString(f["id"]),
         Title:  toString(f["title"]),
@@ -96,6 +98,11 @@ func (s *Store) CreateAlbum(c *gin.Context) {
 }
 
 func main() {
+    // Load .env file if present
+    if err := godotenv.Load(); err != nil {
+        // .env file is optional, continue if not found
+    }
+
     // env config: read and validate vars.
     airtableToken := os.Getenv("AIRTABLE_TOKEN")
     airtableBaseID := os.Getenv("AIRTABLE_BASE_ID")
